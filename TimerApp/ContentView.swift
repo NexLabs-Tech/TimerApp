@@ -257,7 +257,7 @@ struct ContentView: View {
             }
 
             panelSection(title: "Feedback") {
-                VStack(spacing: 12) { // Wrapped in VStack for spacing
+                VStack(spacing: 12) { 
                     Toggle(isOn: $soundEnabled) {
                         Text("Sound on finish")
                             .foregroundStyle(AppColors.eggshell)
@@ -555,30 +555,26 @@ struct ContentView: View {
     }
     
     private func playAlarmSound() {
-        // 1. Path to the internal iOS System Alarm sound
         let systemSoundPath = "/System/Library/Audio/UISounds/alarm.caf"
         let url = URL(fileURLWithPath: systemSoundPath)
 
         do {
-            // 2. Configure session to bypass the Silent Switch
             try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [])
             try AVAudioSession.sharedInstance().setActive(true)
 
-            // 3. Initialize player with the system file
             audioPlayer = try AVAudioPlayer(contentsOf: url)
             audioPlayer?.prepareToPlay()
             audioPlayer?.play()
         } catch {
             print("Error playing system sound: \(error.localizedDescription)")
             
-            // Fallback: If the file path fails, use the old method as a backup
             AudioServicesPlayAlertSound(SystemSoundID(1005))
         }
     }
 
     private func handleTimerFinished() {
         if soundEnabled {
-            playAlarmSound() // Call the new function
+            playAlarmSound()
         }
         
         if hapticsEnabled {
@@ -614,10 +610,10 @@ struct ContentView: View {
                 .foregroundStyle(AppColors.secondaryText)
             
             content()
-                .frame(maxWidth: .infinity, alignment: .leading) // Forces content to left
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading) // Forces container to stretch
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(panelBackground)
     }
 
