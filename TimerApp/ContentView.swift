@@ -9,6 +9,7 @@ import SwiftUI
 import AudioToolbox
 import UIKit
 import AVFoundation
+import UserNotifications
 
 enum AppColors {
     static let eggshell = Color(hex: 0xF4F1DE)
@@ -40,6 +41,7 @@ extension Color {
 
 struct ContentView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var totalSeconds: Int = 25 * 60
     @State private var remainingSeconds: Int = 25 * 60
@@ -57,6 +59,8 @@ struct ContentView: View {
     @State private var toastMessage: String?
     @State private var showToast = false
     @State private var isFullScreen = false
+    @State private var startDate: Date?
+    @State private var pausedRemainingSeconds: Int = 0
 
     @AppStorage("saved_presets") private var savedPresetsData = ""
     @State private var savedPresets: [SavedPreset] = []
@@ -66,6 +70,7 @@ struct ContentView: View {
     @AppStorage("default_custom_is_break") private var defaultCustomIsBreak = false
     @AppStorage("sound_enabled") private var soundEnabled = true
     @AppStorage("haptics_enabled") private var hapticsEnabled = true
+    @AppStorage("notifications_enabled") private var notificationsEnabled = true
 
     private let workPresets: [TimerPreset] = [
         TimerPreset(title: "15 min", seconds: 15 * 60),
@@ -109,9 +114,17 @@ struct ContentView: View {
         .onAppear {
             savedPresets = loadSavedPresets()
             syncCustomFromDefaults()
+            updateIdleTimer()
+            requestNotificationPermissionIfNeeded()
         }
         .onChange(of: savedPresetsData) { _ in
             savedPresets = loadSavedPresets()
+        }
+        .onChange(of: isRunning) { _ in
+            updateIdleTimer()
+        }
+        .onChange(of: scenePhase) { phase in
+            handleScenePhaseChange(phase)
         }
     }
 
@@ -129,9 +142,13 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity)
                 }
             } else {
-                VStack(spacing: 20) {
-                    timerPanel
-                    rightPanel
+                ScrollView {
+                    VStack(spacing: 20) {
+                        timerPanel
+                        rightPanel
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.bottom, 12)
                 }
             }
         }
@@ -483,11 +500,21 @@ struct ContentView: View {
         isRunning = false
         isBreak = breakMode
         showBreakPrompt = false
+        startDate = nil
+        pausedRemainingSeconds = seconds
     }
 
     private func toggleTimer() {
         if remainingSeconds == 0 {
             resetTimer()
+        }
+        if isRunning {
+            pausedRemainingSeconds = remainingSeconds
+            startDate = nil
+            cancelTimerNotification()
+        } else {
+            startDate = Date()
+            scheduleTimerNotification()
         }
         isRunning.toggle()
     }
@@ -496,12 +523,17 @@ struct ContentView: View {
         remainingSeconds = totalSeconds
         isRunning = false
         showBreakPrompt = false
+        startDate = nil
+        pausedRemainingSeconds = totalSeconds
+        cancelTimerNotification()
     }
 
     private func startCustomTimer() {
         let seconds = max(1, customMinutes * 60 + customSeconds)
         setTimer(seconds: seconds, breakMode: customIsBreak)
+        startDate = Date()
         isRunning = true
+        scheduleTimerNotification()
     }
 
     private func saveCustomPreset() {
@@ -573,6 +605,7 @@ struct ContentView: View {
     }
 
     private func handleTimerFinished() {
+        cancelTimerNotification()
         if soundEnabled {
             playAlarmSound()
         }
@@ -594,13 +627,8 @@ struct ContentView: View {
     }
 
     private func tickTimer() {
-        guard isRunning, remainingSeconds > 0 else { return }
-        remainingSeconds -= 1
-        if remainingSeconds == 0 {
-            isRunning = false
-            showBreakPrompt = true
-            handleTimerFinished()
-        }
+        guard isRunning else { return }
+        updateRemainingFromStartDate()
     }
 
     private func panelSection<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
@@ -747,6 +775,63 @@ struct ContentView: View {
                 showToast = false
             }
         }
+    }
+
+    private func updateRemainingFromStartDate() {
+        guard let startDate else { return }
+        let elapsed = Int(Date().timeIntervalSince(startDate))
+        let newRemaining = max(0, pausedRemainingSeconds - elapsed)
+        if newRemaining != remainingSeconds {
+            remainingSeconds = newRemaining
+        }
+        if remainingSeconds == 0 {
+            isRunning = false
+            showBreakPrompt = true
+            handleTimerFinished()
+        }
+    }
+
+    private func handleScenePhaseChange(_ phase: ScenePhase) {
+        switch phase {
+        case .active:
+            if isRunning {
+                updateRemainingFromStartDate()
+            }
+        case .background, .inactive:
+            if isRunning {
+                updateRemainingFromStartDate()
+            }
+        @unknown default:
+            break
+        }
+    }
+
+    private func updateIdleTimer() {
+        UIApplication.shared.isIdleTimerDisabled = isRunning
+    }
+
+    private func requestNotificationPermissionIfNeeded() {
+        guard notificationsEnabled else { return }
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+    }
+
+    private func scheduleTimerNotification() {
+        guard notificationsEnabled, remainingSeconds > 0 else { return }
+        let content = UNMutableNotificationContent()
+        content.title = isBreak ? "Break finished" : "Focus finished"
+        content.body = isBreak ? "Ready to get back to work." : "Time for a break."
+        content.sound = .default
+
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: TimeInterval(remainingSeconds), repeats: false)
+        let request = UNNotificationRequest(identifier: "timerFinished", content: content, trigger: trigger)
+
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: ["timerFinished"])
+        center.add(request)
+    }
+
+    private func cancelTimerNotification() {
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["timerFinished"])
     }
 }
 
